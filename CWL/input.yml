@@ -1,0 +1,9 @@
+reference:
+  class: File
+  path: reference.fasta
+
+reads:
+  class: File[]
+  path:
+    - read1.fastq
+    - read2.fastq
