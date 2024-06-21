@@ -1,0 +1,651 @@
+---
+title: "GSE201925"
+author: "Dayou Zou"
+date: "2024-02-19"
+output: html_document
+---
+
+Import packages.
+```{r, message=FALSE}
+rm(list=ls())
+options(stringsAsFactors = F) 
+library(Seurat)
+library(ggplot2)
+library(clustree)
+library(cowplot)
+library(dplyr)
+library(stringr)
+library(tidyverse)
+library(patchwork)
+library(ggsci)
+```
+
+Import raw data.
+```{r}
+# dir_name = list.dirs('./data/GSE201925_raw/')[-1]
+# 
+# count = Read10X(dir_name)
+# scRNAlist <- list()
+# 
+# for (i in 1: length(dir_name)){
+#   
+#   # Read output of cellranger
+#   sample <- Read10X(data.dir = paste('./GSE201925_raw/',dir_name[i], sep = ''))
+#   
+#   # Create seurat subject, with min cell nember = 3, min feature = 200 (from Seurat document)
+#   scRNAlist[[i]] <- CreateSeuratObject(sample, project = dir_name[i], min.cells = 3, min.features = 200)
+# }
+```
+
+```{r}
+dir_name = list.dirs('../data/GSE201925_raw/')[-1]
+cts = Read10X(dir_name)
+
+sce.all = CreateSeuratObject(counts = cts, min.cells = 5, min.features = 300)
+```
+
+
+QC.
+
+
+```{r}
+# Calculate percentage of mitochondrial gene ratio
+head(row.names(sce.all))
+mito_genes=rownames(sce.all)[grep("^MT-", rownames(sce.all))] 
+mito_genes 
+sce.all=PercentageFeatureSet(sce.all, "^MT-", col.name = "percent_mito")
+fivenum(sce.all@meta.data$percent_mito)
+```
+
+```{r}
+# Calculate ribosomal gene ratio
+ribo_genes=rownames(sce.all)[grep("^Rp[sl]", rownames(sce.all),ignore.case = T)]
+ribo_genes
+sce.all=PercentageFeatureSet(sce.all, "^RP[SL]", col.name = "percent_ribo")
+fivenum(sce.all@meta.data$percent_ribo)
+```
+```{r}
+# Calculate red blood cell gene ratio
+hb_genes <- rownames(sce.all)[grep("^Hb[^(p)]", rownames(sce.all),ignore.case = T)]
+hb_genes
+sce.all=PercentageFeatureSet(sce.all, "^HB[^(P)]", col.name = "percent_hb")
+fivenum(sce.all@meta.data$percent_hb)
+```
+
+Visualization before QC
+```{r, warning= FALSE}
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo", "percent_hb")
+violin_before <- list()
+
+for (i in 1:length(feats)){
+  violin_before[[i]] <-VlnPlot(sce.all, group.by = "orig.ident", features = feats[i], ncol = 1, pt.size = 0)
+  ggsave(filename=paste0(feats[i],".pdf"),plot=violin_before[[i]],path = "../results/1-QC/")
+}
+```
+
+```{r}
+violin_before
+```
+
+```{r}
+feats <- c("percent_mito", "percent_ribo", "percent_hb")
+p2=VlnPlot(sce.all, group.by = "orig.ident", features = feats, pt.size = 0, ncol = 3, same.y.lims=T) + 
+  scale_y_continuous(breaks=seq(0, 100, 5)) +
+  NoLegend()
+p2	
+```
+```{r}
+ggsave(filename="Vlnplot_same_yaxis_before.pdf",plot=p2,path = "../results/1-QC/")
+```
+
+
+```{r}
+# Check cell numbers after filtring
+selected_mito <- WhichCells(sce.all, expression = percent_mito < 15)
+selected_ribo <- WhichCells(sce.all, expression = percent_ribo > 3)
+selected_hb <- WhichCells(sce.all, expression = percent_hb < 1 )
+length(selected_hb)
+length(selected_ribo)
+length(selected_mito)
+```
+```{r}
+sce.all.filt <- sce.all
+sce.all.filt <- subset(sce.all.filt, cells = selected_mito)
+sce.all.filt <- subset(sce.all.filt, cells = selected_ribo)
+sce.all.filt <- subset(sce.all.filt, cells = selected_hb)
+dim(sce.all.filt)
+
+table(sce.all.filt$orig.ident) 
+
+```
+
+
+Visualization after filtering
+```{r}
+feats <- c("nFeature_RNA", "nCount_RNA")
+p1_filtered=VlnPlot(sce.all.filt, group.by = "orig.ident", features = feats, pt.size = 0, ncol = 2) + 
+  NoLegend()
+ggsave(filename="Vlnplot1_filtered.pdf",plot=p1_filtered,path = "../results/1-QC/")
+
+feats <- c("percent_mito", "percent_ribo", "percent_hb")
+p2_filtered=VlnPlot(sce.all.filt, group.by = "orig.ident", features = feats, pt.size = 0, ncol = 3) + 
+  NoLegend()
+ggsave(filename="Vlnplot2_filtered.pdf",plot=p2_filtered,path = "../results/1-QC/")
+```
+
+
+```{r}
+p1_filtered
+p2_filtered
+```
+
+Filter out specific gene(like housekeeping genes if needed)
+```{r}
+# Filter MALAT1 
+#sce.all.filt <- sce.all.filt[!grepl("MALAT1", rownames(sce.all.filt),ignore.case = T), ]
+# Filter Mitocondrial
+#sce.all.filt <- sce.all.filt[!grepl("^MT-", rownames(sce.all.filt),ignore.case = T), ]
+
+#dim(sce.all.filt) 
+```
+
+Cell-Cycle Scoring
+```{r}
+sce.all.filt = NormalizeData(sce.all.filt)
+s.genes=Seurat::cc.genes.updated.2019$s.genes
+g2m.genes=Seurat::cc.genes.updated.2019$g2m.genes
+sce.all.filt=CellCycleScoring(object = sce.all.filt,
+                              s.features = s.genes,
+                              g2m.features = g2m.genes,
+                              set.ident = TRUE)
+p4=VlnPlot(sce.all.filt, features = c("S.Score", "G2M.Score"), group.by = "orig.ident",
+           ncol = 2, pt.size = 0)
+ggsave(filename="Vlnplot4_cycle.pdf",plot=p4,"../results/1-QC/")
+
+sce.all.filt@meta.data  %>% ggplot(aes(S.Score,G2M.Score))+geom_point(aes(color=Phase))+
+  theme_minimal()
+ggsave(filename="cycle_details.pdf", path = "../results/1-QC/" )
+```
+
+Harmony
+```{r}
+dir.create("../results/2-harmony")
+```
+
+```{r}
+sce <- sce.all.filt %>%
+  NormalizeData(normalization.method = "LogNormalize", scale.factor = 1e4) %>%
+  FindVariableFeatures() %>%
+  ScaleData() %>%
+  RunPCA(features = VariableFeatures(object = sce))
+```
+
+```{r}
+# plot PCA
+pca = DimPlot(sce, reduction = 'pca', group.by = "orig.ident")
+pca
+ggsave(filename="PCA.pdf",plot=pca,path = "../results/2-harmony/")
+```
+
+```{r}
+library(harmony)
+seuratObj <- RunHarmony(sce, "orig.ident")
+names(seuratObj@reductions)
+seuratObj <- RunUMAP(seuratObj,  dims = 1:15, 
+                     reduction = "harmony")
+DimPlot(seuratObj,group.by = "orig.ident",reduction = "umap" ) 
+```
+
+```{r}
+sce=seuratObj
+sce <- FindNeighbors(sce, reduction = "harmony",
+                     dims = 1:15) 
+sce.all=sce
+```
+```{r}
+# check different revolutions
+for (res in c(0.01, 0.05, 0.1, 0.2, 0.3, 0.5,0.8,1)) {
+  sce.all=FindClusters(sce.all, #graph.name = "CCA_snn",
+                       resolution = res, algorithm = 1)
+}
+colnames(sce.all@meta.data)
+apply(sce.all@meta.data[,grep("RNA_snn",colnames(sce.all@meta.data))],2,table)
+```
+
+```{r}
+p1_dim_low=plot_grid(ncol = 3, DimPlot(sce.all, reduction = "umap", group.by = "RNA_snn_res.0.01") +
+                   ggtitle("louvain_0.01"), DimPlot(sce.all, reduction = "umap", group.by = "RNA_snn_res.0.1") +
+                   ggtitle("louvain_0.1"), DimPlot(sce.all, reduction = "umap", group.by = "RNA_snn_res.0.2") +
+                   ggtitle("louvain_0.2"))
+ggsave(plot=p1_dim_low, filename="Dimplot_diff_resolution_low.pdf",width = 14, path = "../results/2-harmony/")
+
+p1_dim_high=plot_grid(ncol = 3, DimPlot(sce.all, reduction = "umap", group.by = "RNA_snn_res.0.8") +
+                   ggtitle("louvain_0.8"), DimPlot(sce.all, reduction = "umap", group.by = "RNA_snn_res.1") +
+                   ggtitle("louvain_1"), DimPlot(sce.all, reduction = "umap", group.by = "RNA_snn_res.0.3") +
+                   ggtitle("louvain_0.3"))
+ggsave(plot=p1_dim_high, filename="Dimplot_diff_resolution_high.pdf",width = 18,path ="../results/2-harmony/" )
+```
+
+
+```{r}
+# cluster tree
+p2_tree=clustree(sce.all@meta.data, prefix = "RNA_snn_res.")
+ggsave(plot=p2_tree, filename="Tree_diff_resolution.pdf", path ="../results/2-harmony/")
+```
+
+Pick resolution = 0.8
+```{r}
+sel.clust = "RNA_snn_res.0.8"
+sce.all <- SetIdent(sce.all, value = sel.clust)
+table(sce.all@active.ident) 
+```
+
+```{r}
+dir.create("../results/3-Clustering")
+sce.all$group<-ifelse(grepl(1,sce.all$orig.ident),"Control",
+                      ifelse(grepl(2,sce.all$orig.ident),"ADU-S100 10µM","ADU-S100 50µM"))
+table(sce.all$group)
+
+DimPlot(sce.all, reduction = "umap", group.by = "RNA_snn_res.0.8",label = T) 
+ggsave('umap_by_RNA_snn_res.0.8.pdf',width = 7,height = 6, path = "../results/3-Clustering/")
+
+# group
+DimPlot(sce.all, reduction = "umap",split.by = 'group',
+        group.by = "RNA_snn_res.0.8",label = T) 
+
+ggsave('group_umap.pdf',width = 15,height = 6, path = "../results/3-Clustering/")
+```
+
+In Seurat V5, there are no features information in assays_RNA_layers_counts, try to add row names and cells for counts data:
+```{r}
+genes <- sce.all[["RNA"]]@features %>%
+  rownames()
+rownames(sce.all@assays$RNA@layers$counts) <- genes
+
+cells <- sce.all[["RNA"]]@cells %>%
+  rownames()
+colnames(sce.all@assays$RNA@layers$counts) <- cells
+```
+
+Check common markers
+```{r}
+genes_to_check = c('PTPRC', 'CD3D', 'CD3E', 'CD4','CD8A','CD19', 'CD79A', 'MS4A1' ,
+                   'IGHG1', 'MZB1', 'SDC1',
+                   'CD68', 'CD163', 'CD14',
+                   'TPSAB1' , 'TPSB2',  # mast cells,
+                   'MKI67','TOP2A','KLRC1',
+                   'RCVRN','FPR1' , 'ITGAM' ,
+                   'FGF7','MME', 'ACTA2',
+                   'PECAM1', 'VWF',
+                   'KLRB1','NCR1', # NK
+                   'EPCAM' , 'KRT19', 'ALDH1A1',
+                   'MKI67' ,'TOP2A' )
+genes_to_check=str_to_upper(unique(genes_to_check))
+p_all_markers <- DotPlot(sce.all, features = genes_to_check,
+                         assay='RNA' )  + coord_flip()
+p_all_markers
+ggsave('check_all_markers.pdf',height = 10, path = "../results/3-Clustering/")
+```
+
+Check T cell markers
+```{r}
+genes_to_check = c('PTPRC', 'CD3D', 'CD3E', 'CD4','CD8A',
+                   'CCR7', 'SELL' , 'TCF7','CXCR6' , 'ITGA1',
+                   'FOXP3', 'IL2RA',  'CTLA4','GZMB', 'GZMK','CCL5',
+                   'IFNG', 'CCL4', 'CCL3' ,
+                   'PRF1' , 'NKG7') 
+genes_to_check=str_to_upper(unique(genes_to_check))
+DotPlot(sce.all, features = genes_to_check,
+                         assay='RNA' )  + coord_flip()
+ggsave('check_T_cell_markers.pdf',height = 8, path = "../results/3-Clustering/")
+```
+
+Check B cells:
+```{r}
+# mast cells, TPSAB1 and TPSB2 
+# B cell,  CD79A  and MS4A1 (CD20) 
+# naive B cells, such as MS4A1 (CD20), CD19, CD22, TCL1A, and CD83, 
+# plasma B cells, such as CD38, TNFRSF17 (BCMA), and IGHG1/IGHG4
+genes_to_check = c('CD3D','MS4A1','CD79A',
+                   'CD19', 'CD22', 'TCL1A',  'CD83', #  naive B cells
+                   'CD38','TNFRSF17','IGHG1','IGHG4', # plasma B cells,
+                   'TPSAB1' , 'TPSB2',  # mast cells,
+                   'PTPRC' ) 
+genes_to_check=str_to_upper(unique(genes_to_check))
+DotPlot(sce.all, features = genes_to_check,
+                         assay='RNA' )  + coord_flip()
+ggsave('check_B_cell_markers.pdf',height = 8, path = "../results/3-Clustering/")
+```
+
+Check Myeloid markers:
+```{r}
+genes_to_check = c('CD68', 'CD163', 'CD14',  'CD86','C1QA',  'C1QB',  # mac
+                   'S100A9', 'S100A8', 'MMP19',# monocyte
+                   'LAMP3', 'IDO1','IDO2',## DC3 
+                   'MRC1','MSR1','ITGAE','ITGAM','ITGAX','SIGLEC7', 
+                   'CD1E','CD1C', # DC2
+                   'XCR1','CLEC9A','FCER1A',# DC1
+                   'GZMB','TCF4','IRF7')
+genes_to_check=str_to_upper(unique(genes_to_check))
+DotPlot(sce.all, features = genes_to_check,
+                         assay='RNA' )  + coord_flip()
+ggsave('check_Myeloid_markers.pdf',height = 10, path = "../results/3-Clustering/")
+```
+
+Check Epithelial markers:
+```{r}
+# epi or tumor (EPCAM, KRT19, PROM1, ALDH1A1, CD24).
+# - alveolar type I cell (AT1; AGER+)
+# - alveolar type II cell (AT2; SFTPA1)
+# - secretory club cell (Club; SCGB1A1+)
+# - basal airway epithelial cells (Basal; KRT17+)
+# - ciliated airway epithelial cells (Ciliated; TPPP3+) 
+genes_to_check = c(  'EPCAM' , 'KRT19', 'PROM1', 'ALDH1A1' ,
+                     'AGER','SFTPA1','SCGB1A1','KRT17','TPPP3',
+                     'KRT4','KRT14','KRT8','KRT18',
+                     'CD3D','PTPRC' ) 
+genes_to_check=str_to_upper(unique(genes_to_check))
+DotPlot(sce.all, features = genes_to_check,
+                         assay='RNA' )  + coord_flip()
+ggsave('check_epi_markers.pdf',height = 8, path = "../results/3-Clustering/")
+```
+
+Check Stromal markers:
+```{r}
+genes_to_check = c('TEK',"PTPRC","EPCAM","PDPN","PECAM1",'PDGFRB',
+                   'CSPG4','GJB2', 'RGS5','ITGA7',
+                   'ACTA2','RBP1','CD36', 'ADGRE5','COL11A1','FGF7', 'MME')
+genes_to_check=str_to_upper(unique(genes_to_check))
+DotPlot(sce.all, features = genes_to_check,
+                         assay='RNA' )  + coord_flip()
+ggsave('check_stromal_markers.pdf',height = 8, path = "../results/3-Clustering/")
+```
+
+Check markers in paper:
+```{r}
+genes_to_check = c('COL1A2',"LUM","DCN","VWF","CLDN5",'CDH5',
+                   'TOP2A','MIK167', 'IGKC','MZB1',
+                   'JCHAIN','CPA3','TPSAB1', 'C1QA','MIRC1','CD68', 'LYZ',
+                   'CD3G','CD3E','CD3D', 'CD79B','CD79A','MS4A1', 'CLEC10AF',
+                   'SCCER1A','SCGB3A1','GB1A1', 'PIFO','TPPP3','NIKX2-1', 'NAPSA',"EPCAM","SFTPC","SFTPB")
+genes_to_check=str_to_upper(unique(genes_to_check))
+p_paper_markers <- DotPlot(sce.all, features = genes_to_check,
+                         assay='RNA' )  + coord_flip()
+p_paper_markers
+ggsave('check_paper_markers.pdf',height = 8, path = "../results/3-Clustering/")
+```
+
+```{r}
+p_umap=DimPlot(sce.all, reduction = "umap",
+               group.by = "RNA_snn_res.0.8",label = T) 
+
+p_all_markers+p_umap
+ggsave('all_markers_uma.pdf',width = 13,height = 8, path = "../results/3-Clustering/")
+```
+
+```{r}
+p_paper_markers+p_umap
+ggsave('paper_markers_uma.pdf',width = 13,height = 8, path = "../results/3-Clustering/")
+```
+
+```{r}
+DimPlot(sce.all, reduction = "umap",split.by = 'orig.ident',
+        group.by = "RNA_snn_res.0.8",label = T) 
+ggsave('orig.ident_umap.pdf',width = 15,height = 6, path = "../results/3-Clustering/")
+```
+
+```{r}
+DimPlot(sce.all, reduction = "umap",split.by = 'seurat_clusters',
+        group.by = "RNA_snn_res.0.8",label = T) 
+ggsave('group_umap.pdf',width = 30, path = "../results/3-Clustering/")
+```
+
+```{r}
+sce.all  
+sce=sce.all
+table(Idents(sce))  
+sce.markers <- FindAllMarkers(object = sce, only.pos = TRUE, min.pct = 0.25, 
+                              thresh.use = 0.25)
+
+# Data set too big
+#DT::datatable(sce.markers)
+```
+```{r}
+res='RNA_snn_res.0.8'
+write.csv(sce.markers,file=paste0('../results/3-Clustering/',res,'_sce.markers.csv'))
+```
+
+```{r}
+# Top3 heatmap
+top10 <- sce.markers %>% group_by(cluster) %>% top_n(10, avg_log2FC)
+top3 <- sce.markers %>% group_by(cluster) %>% top_n(3, avg_log2FC)
+DoHeatmap(sce,top3$gene)
+ggsave(paste0(res,'_DoHeatmap_check_top3_markers_by_clusters.pdf'), path = "../results/3-Clustering/")
+```
+
+```{r}
+DotPlot(sce, features = unique(top3$gene),
+             assay='RNA'  )  + coord_flip()
+ggsave(paste0(res,'_DotPlot_check_top3_markers_by_clusters.pdf'),
+       height = 15,width = 10, path = "../results/3-Clustering/")
+```
+
+```{r}
+DotPlot(sce, features = unique(top10$gene),
+             assay='RNA'  )  + coord_flip()
+ggsave(paste0(res,'_DotPlot_check_top10_markers_by_clusters.pdf'),
+       height = 25,width = 10, path = "../results/3-Clustering/")
+```
+```{r}
+dir.create("../results/3-celltype")
+```
+
+```{r}
+genes <- c("Cd3d","Trbc2","Prtn3","Lmo2","Sox4","Ctla2a","Cd34",
+           "Idh2","Cdk6","BC035044","Phgdh","Ms4a3","Ctsg","Igfbp4",
+           "Cst7","Prss57","Cd9","AW112010","Klrd1","Klrk1","Gzma",
+           "Klre1","Fn1","Ccl9","Ctss","Ms4a6c","S100a4","Tcf4","Ccr9",
+           "Cd7","Cox6a2","Siglech","Mzb1","Chchd10","Vpreb3","H2-Aa","Cd79a",
+           "H2-Eb1","Ebf1","Iglc2")
+genes=str_to_upper(genes)
+paper_markers =DotPlot(sce, assay = "RNA", features = genes,group.by = "RNA_snn_res.0.8" ) +
+  theme(axis.text.x = element_text(angle = 45, 
+                                   vjust = 0.5, hjust=0.5))
+paper_markers
+```
+
+
+```{r}
+ps <- plot_grid(paper_markers,p_umap,rel_widths = c(1.5,1))
+ps
+ggsave(ps,filename =  'umap_paper_marker_markers.pdf'
+       ,units = "cm",width = 60,height = 22, path = "../results/3-celltype/")
+```
+Plot for Myeloid cells(Mac,pDC,DC1,DC2,DC3,Mono)
+```{r}
+Mac=c("CD14", "CD163", "APOE", "C1QA", "C1QB", "C1QC")
+pDC=c("LILRA4", "IL3RA","TCF4","TCL1A","CLEC4C")
+DC1=c("CLEC9A", "XCR1", "BATF3")  
+DC2=c("CD1A", "FCER1A", "CD1C","CD1E","CLEC10A")
+DC3=c("CCR7", "LAMP3", "FSCN1","CCL22","BIRC3")
+Mono=c("VCVN", "FCN1", "S100A12", "S100A8", "S100A9",'FCGR3A')
+genes_to_check =list(
+  Mac=Mac,
+  pDC=pDC,
+  DC1=DC1, 
+  DC2=DC2,
+  DC3=DC3 ,
+  Mono=Mono
+)
+genes_to_check = lapply(genes_to_check, str_to_upper)
+p_all_markers=DotPlot(sce.all , 
+                      features = genes_to_check,
+                      scale = T,assay='RNA' )+
+  theme(axis.text.x=element_text(angle=45,hjust = 1))
+p_all_markers
+ggsave('check_myeloids_markers.pdf',height = 11,width = 11, path = "../results/3-celltype/")
+```
+
+```{r}
+sce.all$group<-ifelse(grepl(1,sce.all$orig.ident),"Control",
+                      ifelse(grepl(2,sce.all$orig.ident),"ADU-S100 10µM","ADU-S100 50µM"))
+table(sce.all$group)
+```
+
+```{r}
+DimPlot(sce.all, reduction = "umap",split.by = 'group',
+        group.by = "RNA_snn_res.0.8",label = T) 
+
+ggsave('group_umap.pdf',width = 15,height = 6, path = "../results/3-celltype/")
+```
+
+Annotation:
+```{r}
+# Check MSLN tumor
+genes_to_check = c("CXCL9","CXCL10","CXCL11","MSLN")
+genes_to_check=str_to_upper(unique(genes_to_check))
+DotPlot(sce.all, features = genes_to_check,
+                         assay='RNA' )  + coord_flip()
+ggsave('check_MSLN_markers.pdf', path = "../results/3-Clustering/")
+```
+
+```{r}
+# Check fibo tumor
+genes_to_check = c("FGF7","MME","ACTA2",
+                   "DCN", "LUM","GSN")
+genes_to_check=str_to_upper(unique(genes_to_check))
+DotPlot(sce.all, features = genes_to_check,
+                         assay='RNA' )  + coord_flip()
+ggsave('check_fibo_markers.pdf', path = "../results/3-Clustering/")
+```
+
+
+```{r}
+celltype=data.frame(ClusterID=0:19,
+                    celltype= 0:19)
+
+celltype[celltype$ClusterID %in% c( 3,8,14 ),2]='NK T cell'  
+celltype[celltype$ClusterID %in% c( 17),2]='cycling'   
+celltype[celltype$ClusterID %in% c( 12),2]='B' 
+celltype[celltype$ClusterID %in% c( 18),2]='mast'  
+celltype[celltype$ClusterID %in% c(0,1,2,4,5,6,7,10),2]='MSLN Tumor'  
+celltype[celltype$ClusterID %in% c(9,11,16),2]='fibo'  
+celltype[celltype$ClusterID %in% c(15),2]='mac'
+celltype[celltype$ClusterID %in% c( 13),2]='pDC' 
+celltype[celltype$ClusterID %in% c( 19),2]='DC3'
+
+head(celltype)
+```
+```{r}
+sce.all@meta.data$celltype = "NA"
+for(i in 1:nrow(celltype)){
+  sce.all@meta.data[which(sce.all@meta.data$RNA_snn_res.0.8 == celltype$ClusterID[i]),'celltype'] <- celltype$celltype[i]}
+table(sce.all@meta.data$celltype)
+```
+
+Check in umap
+```{r}
+umap_celltype <- DimPlot(sce.all, reduction = "umap", group.by = "celltype",label = T)
+umap_celltype
+ggsave('umap_celltype.pdf', path = "../results/3-celltype/")
+```
+Check clusters in lower resolution.
+```{r}
+table(sce.all@meta.data$celltype,sce.all@meta.data$RNA_snn_res.0.01)
+```
+```{r}
+genes_to_check = c('PTPRC', 'CD3D', 'CD3E', 'CD4','CD8A',
+                   'CD19', 'CD79A', 'MS4A1' ,
+                   'IGHG1', 'MZB1', 'SDC1',
+                   'CD68', 'CD163', 'CD14', 
+                   'TPSAB1' , 'TPSB2',  # mast cells,
+                   'RCVRN','FPR1' , 'ITGAM' ,
+                   'C1QA',  'C1QB',  # mac
+                   'S100A9', 'S100A8', 'MMP19',# monocyte
+                   'FCGR3A',
+                   'LAMP3', 'IDO1','IDO2',## DC3 
+                   'CD1E','CD1C', # DC2
+                   'KLRB1','NCR1', # NK 
+                   'FGF7','MME', 'ACTA2', ## human  fibo 
+                   'DCN', 'LUM',  'GSN' , ## mouse PDAC fibo 
+                   'MKI67' , 'TOP2A', 
+                   'PECAM1', 'VWF',  ## endo 
+                   'EPCAM' , 'KRT19','KRT7', # epi 
+                   'FYXD2', 'TM4SF4', 'ANXA4',# cholangiocytes
+                   'APOC3', 'FABP1',  'APOA1',  # hepatocytes
+                   'Serpina1c','PROM1', 'ALDH1A1',
+                   "NKG7",#NKT
+                   "CXCL9", "CXCL10", "CXCL11","MSLN")
+p_all_markers=DotPlot(sce.all, features = genes_to_check,
+                      assay='RNA' ,group.by = 'celltype' )  + coord_flip()+
+  theme(axis.text.x = element_text(angle = 45, 
+                                    vjust = 0.5, hjust=0.5)) 
+p_all_markers+umap_celltype
+ggsave('all_markers_umap_by_celltype.pdf',width = 15,height = 10, path = "../results/3-celltype/")
+
+p_harmony=DimPlot(sce.all, reduction = "harmony", group.by = "celltype",label = T)
+p_all_markers+p_harmony
+ggsave('all_markers_umap_by_harmony.pdf',width = 15,height = 10, path = "../results/3-celltype/")
+```
+
+Check T-sne
+```{r}
+sce.all=RunTSNE(sce.all,  dims = 1:15, 
+        reduction = "harmony")
+p_tsne=DimPlot(sce.all, reduction = "tsne", group.by = "celltype",label = T)
+p_all_markers+p_tsne
+ggsave('all_markers_umap_by_tsne.pdf',width = 15,height = 10, path = "../results/3-celltype/")
+```
+Check MSLN Tumor marker genes expression
+```{r}
+features = c('CXCL9',"CXCL10","CXCL11","MSLN")
+FeaturePlot(sce.all,features = features )
+
+```
+
+Calculate average expression
+```{r}
+av <-AverageExpression(sce.all,
+                      group.by = "celltype",
+                       assays = "RNA") 
+av=av[[1]]
+head(av)
+write.csv(av,file = '../results/3-celltype/AverageExpression-0.8.csv')
+```
+Try more visualization
+```{r}
+color = c(pal_d3("category20")(20),
+          pal_d3("category20b")(20),
+          pal_d3("category20c")(20),
+          pal_d3("category10")(10))
+
+DimPlot(sce.all, reduction = "umap", group.by = "celltype",
+        cols = color,
+        pt.size = 1.5,
+        label = T
+) 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

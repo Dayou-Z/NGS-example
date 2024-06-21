@@ -1,5 +1,7 @@
 *
 !*.gitignore
 !*.md
+!notebooks/
 !notebooks/**.Rmd
+!results/
 !results/**/*.pdf
