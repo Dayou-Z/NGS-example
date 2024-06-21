@@ -4,4 +4,5 @@
 !notebooks/
 !notebooks/**.Rmd
 !results/
-!results/**/*.pdf
+!results/**/
+!results/**/**.pdf
