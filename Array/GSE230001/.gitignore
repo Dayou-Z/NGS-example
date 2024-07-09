@@ -4,6 +4,8 @@
 !notebooks/
 !notebooks/*.md
 !notebooks/*/
+!notebooks/*/*/
+!notebooks/*/*/*.png
 !notebooks/*.md/
 !notebooks/**.Rmd
 !results/
