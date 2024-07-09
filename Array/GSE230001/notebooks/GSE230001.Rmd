@@ -215,7 +215,24 @@ p_kkeg <- barplot(ekk); p_kkeg
 ggsave("../results/KEGG.pdf", plot = p_kkeg, height = 5, width = 7)
 ```
 
+```{r}
+devtools::install_github("junjunlab/GseaVis")
+ego_df <- data.frame(ego) %>% 
+  head(10)
+```
+```{r}
+library(GseaVis)
+sankeyGoPlot(goData = ego_df)
+```
 
+```{r}
+# adjust parameters to align the images
+p_sgo <- sankeyGoPlot(goData = ego_df,
+                      downShift = 8, upShift = 2,
+                      sankeyExpand = c(0.4,1))
+p_sgo
+ggsave("../results/sankey_go.pdf",p_sgo)
+```
 
 
 
