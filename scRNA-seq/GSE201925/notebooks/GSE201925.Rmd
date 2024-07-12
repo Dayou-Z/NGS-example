@@ -2,7 +2,7 @@
 title: "GSE201925"
 author: "Dayou Zou"
 date: "2024-02-19"
-output: html_document
+output: github_document
 ---
 
 Import packages.
@@ -14,10 +14,16 @@ library(ggplot2)
 library(clustree)
 library(cowplot)
 library(dplyr)
+library(reshape2)
 library(stringr)
 library(tidyverse)
+library(gplots)
+library(ggpubr)
 library(patchwork)
 library(ggsci)
+```
+```{r}
+set.seed(1)
 ```
 
 Import raw data.
@@ -77,8 +83,13 @@ Visualization before QC
 feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo", "percent_hb")
 violin_before <- list()
 
+# Create group info
+sce.all$group<-ifelse(grepl(1,sce.all$orig.ident),"Control",
+                      ifelse(grepl(2,sce.all$orig.ident),"ADU-S100 10µM","ADU-S100 50µM"))
+table(sce.all$group)
+
 for (i in 1:length(feats)){
-  violin_before[[i]] <-VlnPlot(sce.all, group.by = "orig.ident", features = feats[i], ncol = 1, pt.size = 0)
+  violin_before[[i]] <-VlnPlot(sce.all, group.by = "group", features = feats[i], ncol = 1, pt.size = 0)
   ggsave(filename=paste0(feats[i],".pdf"),plot=violin_before[[i]],path = "../results/1-QC/")
 }
 ```
@@ -89,7 +100,7 @@ violin_before
 
 ```{r}
 feats <- c("percent_mito", "percent_ribo", "percent_hb")
-p2=VlnPlot(sce.all, group.by = "orig.ident", features = feats, pt.size = 0, ncol = 3, same.y.lims=T) + 
+p2=VlnPlot(sce.all, group.by = "group", features = feats, pt.size = 0, ncol = 3, same.y.lims=T) + 
   scale_y_continuous(breaks=seq(0, 100, 5)) +
   NoLegend()
 p2	
@@ -115,7 +126,7 @@ sce.all.filt <- subset(sce.all.filt, cells = selected_ribo)
 sce.all.filt <- subset(sce.all.filt, cells = selected_hb)
 dim(sce.all.filt)
 
-table(sce.all.filt$orig.ident) 
+table(sce.all.filt$group) 
 
 ```
 
@@ -123,12 +134,12 @@ table(sce.all.filt$orig.ident)
 Visualization after filtering
 ```{r}
 feats <- c("nFeature_RNA", "nCount_RNA")
-p1_filtered=VlnPlot(sce.all.filt, group.by = "orig.ident", features = feats, pt.size = 0, ncol = 2) + 
+p1_filtered=VlnPlot(sce.all.filt, group.by = "group", features = feats, pt.size = 0, ncol = 2) + 
   NoLegend()
 ggsave(filename="Vlnplot1_filtered.pdf",plot=p1_filtered,path = "../results/1-QC/")
 
 feats <- c("percent_mito", "percent_ribo", "percent_hb")
-p2_filtered=VlnPlot(sce.all.filt, group.by = "orig.ident", features = feats, pt.size = 0, ncol = 3) + 
+p2_filtered=VlnPlot(sce.all.filt, group.by = "group", features = feats, pt.size = 0, ncol = 3) + 
   NoLegend()
 ggsave(filename="Vlnplot2_filtered.pdf",plot=p2_filtered,path = "../results/1-QC/")
 ```
@@ -158,9 +169,11 @@ sce.all.filt=CellCycleScoring(object = sce.all.filt,
                               s.features = s.genes,
                               g2m.features = g2m.genes,
                               set.ident = TRUE)
-p4=VlnPlot(sce.all.filt, features = c("S.Score", "G2M.Score"), group.by = "orig.ident",
+p4=VlnPlot(sce.all.filt, features = c("S.Score", "G2M.Score"), group.by = "group",
            ncol = 2, pt.size = 0)
-ggsave(filename="Vlnplot4_cycle.pdf",plot=p4,"../results/1-QC/")
+```
+```{r}
+ggsave(filename="Vlnplot4_cycle.pdf", plot=p4, path = "../results/1-QC/")
 
 sce.all.filt@meta.data  %>% ggplot(aes(S.Score,G2M.Score))+geom_point(aes(color=Phase))+
   theme_minimal()
@@ -173,16 +186,16 @@ dir.create("../results/2-harmony")
 ```
 
 ```{r}
-sce <- sce.all.filt %>%
-  NormalizeData(normalization.method = "LogNormalize", scale.factor = 1e4) %>%
-  FindVariableFeatures() %>%
-  ScaleData() %>%
-  RunPCA(features = VariableFeatures(object = sce))
+sce <- sce.all.filt
+sce <- NormalizeData(sce, normalization.method = "LogNormalize", scale.factor = 1e4) 
+sce <- FindVariableFeatures(sce) 
+sce <- ScaleData(sce)
+sce <- RunPCA(sce, features = VariableFeatures(object = sce))
 ```
 
 ```{r}
 # plot PCA
-pca = DimPlot(sce, reduction = 'pca', group.by = "orig.ident")
+pca = DimPlot(sce, reduction = 'pca', group.by = "group")
 pca
 ggsave(filename="PCA.pdf",plot=pca,path = "../results/2-harmony/")
 ```
@@ -193,7 +206,7 @@ seuratObj <- RunHarmony(sce, "orig.ident")
 names(seuratObj@reductions)
 seuratObj <- RunUMAP(seuratObj,  dims = 1:15, 
                      reduction = "harmony")
-DimPlot(seuratObj,group.by = "orig.ident",reduction = "umap" ) 
+DimPlot(seuratObj,group.by = "group",reduction = "umap" ) 
 ```
 
 ```{r}
@@ -202,6 +215,7 @@ sce <- FindNeighbors(sce, reduction = "harmony",
                      dims = 1:15) 
 sce.all=sce
 ```
+
 ```{r}
 # check different revolutions
 for (res in c(0.01, 0.05, 0.1, 0.2, 0.3, 0.5,0.8,1)) {
@@ -226,10 +240,9 @@ p1_dim_high=plot_grid(ncol = 3, DimPlot(sce.all, reduction = "umap", group.by = 
 ggsave(plot=p1_dim_high, filename="Dimplot_diff_resolution_high.pdf",width = 18,path ="../results/2-harmony/" )
 ```
 
-
 ```{r}
 # cluster tree
-p2_tree=clustree(sce.all@meta.data, prefix = "RNA_snn_res.")
+p2_tree=clustree(sce.all@meta.data, prefix = "RNA_snn_res."); p2_tree
 ggsave(plot=p2_tree, filename="Tree_diff_resolution.pdf", path ="../results/2-harmony/")
 ```
 
@@ -242,9 +255,6 @@ table(sce.all@active.ident)
 
 ```{r}
 dir.create("../results/3-Clustering")
-sce.all$group<-ifelse(grepl(1,sce.all$orig.ident),"Control",
-                      ifelse(grepl(2,sce.all$orig.ident),"ADU-S100 10µM","ADU-S100 50µM"))
-table(sce.all$group)
 
 DimPlot(sce.all, reduction = "umap", group.by = "RNA_snn_res.0.8",label = T) 
 ggsave('umap_by_RNA_snn_res.0.8.pdf',width = 7,height = 6, path = "../results/3-Clustering/")
@@ -389,15 +399,15 @@ ggsave('paper_markers_uma.pdf',width = 13,height = 8, path = "../results/3-Clust
 ```
 
 ```{r}
-DimPlot(sce.all, reduction = "umap",split.by = 'orig.ident',
+DimPlot(sce.all, reduction = "umap",split.by = 'group',
         group.by = "RNA_snn_res.0.8",label = T) 
-ggsave('orig.ident_umap.pdf',width = 15,height = 6, path = "../results/3-Clustering/")
+ggsave('group_umap.pdf',width = 15,height = 6, path = "../results/3-Clustering/")
 ```
 
 ```{r}
 DimPlot(sce.all, reduction = "umap",split.by = 'seurat_clusters',
         group.by = "RNA_snn_res.0.8",label = T) 
-ggsave('group_umap.pdf',width = 30, path = "../results/3-Clustering/")
+ggsave('cluster_umap.pdf',width = 30, path = "../results/3-Clustering/")
 ```
 
 ```{r}
@@ -431,16 +441,16 @@ ggsave(paste0(res,'_DotPlot_check_top3_markers_by_clusters.pdf'),
 ```
 
 ```{r}
-DotPlot(sce, features = unique(top10$gene),
-             assay='RNA'  )  + coord_flip()
-ggsave(paste0(res,'_DotPlot_check_top10_markers_by_clusters.pdf'),
-       height = 25,width = 10, path = "../results/3-Clustering/")
+#DotPlot(sce, features = unique(top10$gene),
+#            assay='RNA'  )  + coord_flip()
+#ggsave(paste0(res,'_DotPlot_check_top10_markers_by_clusters.pdf'),
+#       height = 25,width = 10, path = "../results/3-Clustering/")
 ```
 ```{r}
 dir.create("../results/3-celltype")
 ```
 
-```{r}
+```{r,}
 genes <- c("Cd3d","Trbc2","Prtn3","Lmo2","Sox4","Ctla2a","Cd34",
            "Idh2","Cdk6","BC035044","Phgdh","Ms4a3","Ctsg","Igfbp4",
            "Cst7","Prss57","Cd9","AW112010","Klrd1","Klrk1","Gzma",
@@ -449,6 +459,7 @@ genes <- c("Cd3d","Trbc2","Prtn3","Lmo2","Sox4","Ctla2a","Cd34",
            "H2-Eb1","Ebf1","Iglc2")
 genes=str_to_upper(genes)
 paper_markers =DotPlot(sce, assay = "RNA", features = genes,group.by = "RNA_snn_res.0.8" ) +
+  coord_flip()
   theme(axis.text.x = element_text(angle = 45, 
                                    vjust = 0.5, hjust=0.5))
 paper_markers
@@ -484,19 +495,6 @@ p_all_markers=DotPlot(sce.all ,
   theme(axis.text.x=element_text(angle=45,hjust = 1))
 p_all_markers
 ggsave('check_myeloids_markers.pdf',height = 11,width = 11, path = "../results/3-celltype/")
-```
-
-```{r}
-sce.all$group<-ifelse(grepl(1,sce.all$orig.ident),"Control",
-                      ifelse(grepl(2,sce.all$orig.ident),"ADU-S100 10µM","ADU-S100 50µM"))
-table(sce.all$group)
-```
-
-```{r}
-DimPlot(sce.all, reduction = "umap",split.by = 'group',
-        group.by = "RNA_snn_res.0.8",label = T) 
-
-ggsave('group_umap.pdf',width = 15,height = 6, path = "../results/3-celltype/")
 ```
 
 Annotation:
@@ -536,6 +534,7 @@ celltype[celltype$ClusterID %in% c( 19),2]='DC3'
 
 head(celltype)
 ```
+
 ```{r}
 sce.all@meta.data$celltype = "NA"
 for(i in 1:nrow(celltype)){
@@ -553,6 +552,7 @@ Check clusters in lower resolution.
 ```{r}
 table(sce.all@meta.data$celltype,sce.all@meta.data$RNA_snn_res.0.01)
 ```
+
 ```{r}
 genes_to_check = c('PTPRC', 'CD3D', 'CD3E', 'CD4','CD8A',
                    'CD19', 'CD79A', 'MS4A1' ,
@@ -600,7 +600,6 @@ Check MSLN Tumor marker genes expression
 ```{r}
 features = c('CXCL9',"CXCL10","CXCL11","MSLN")
 FeaturePlot(sce.all,features = features )
-
 ```
 
 Calculate average expression
@@ -612,6 +611,7 @@ av=av[[1]]
 head(av)
 write.csv(av,file = '../results/3-celltype/AverageExpression-0.8.csv')
 ```
+
 Try more visualization
 ```{r}
 color = c(pal_d3("category20")(20),
@@ -624,12 +624,74 @@ DimPlot(sce.all, reduction = "umap", group.by = "celltype",
         pt.size = 1.5,
         label = T
 ) 
+ggsave('../results/3-celltype/celltype-umap_2.pdf',height = 6,width = 8) 
 ```
 
+```{r}
+DimPlot(sce.all, reduction = "umap",
+        split.by = "group",
+        group.by = "celltype",label = T)
+ggsave(filename="celltype_per_orig.ident.pdf",width = 15, path = "../results/3-celltype/" )
+```
 
+Visualize the group proportion in cell types
+```{r}
+dir.create("../results/4-group")
+```
 
+```{r}
+tb <- table(sce.all$celltype,
+            sce.all$group)
 
+# balloonplot
+tb_df <- as.data.frame(as.table(tb))
+p_balloon <- ggballoonplot(tb_df, x = "Var2", y = "Var1", size = "Freq", fill = "Freq")
+p_balloon
+ggsave("../results/4-group/balloonplot.pdf", plot = p_balloon)
+```
 
+```{r}
+bar_per <- tb_df %>% 
+  group_by(Var1) %>%
+  mutate(sum(Freq)) %>%
+  mutate(percent = Freq / `sum(Freq)`)
+head(bar_per) 
+write.csv(bar_per,file = "../results/4-group/celltype_by_group_percent.csv")
+```
+
+```{r}
+ggplot(bar_per, aes(x = Var1, y = percent)) +
+  geom_bar(aes(fill = Var2) , stat = "identity") + coord_flip() +
+  theme(axis.ticks = element_line(linetype = "blank"),
+        legend.position = "top",
+        panel.grid.minor = element_line(colour = NA,linetype = "blank"), 
+        panel.background = element_rect(fill = NA),
+        plot.background = element_rect(colour = NA)) +
+  labs(y = "% Relative cell source", fill = NULL)+labs(x = NULL)+
+  scale_fill_d3()
+
+ggsave("../results/4-group/celltype_by_group_percent.pdf",
+      width = 8,height = 4)
+```
+
+```{r}
+# plot in the opposite way
+bar_per_2 <- tb_df %>% 
+  group_by(Var2) %>%
+  mutate(sum(Freq)) %>%
+  mutate(percent = Freq / `sum(Freq)`)
+head(bar_per_2) 
+
+ggplot(bar_per_2, aes(x = Var2, y = percent)) +
+  geom_bar(aes(fill = Var1) , stat = "identity") + coord_flip() +
+  theme(axis.ticks = element_line(linetype = "blank"),
+        legend.position = "top",
+        panel.grid.minor = element_line(colour = NA,linetype = "blank"), 
+        panel.background = element_rect(fill = NA),
+        plot.background = element_rect(colour = NA)) +
+  labs(y = "% Relative group", fill = NULL)+labs(x = NULL)+
+  scale_fill_d3()
+```
 
 
 

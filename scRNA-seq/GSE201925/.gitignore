@@ -3,6 +3,11 @@
 !*.md
 !notebooks/
 !notebooks/**.Rmd
+!notebooks/**.md
+!notebooks/*/
+!notebooks/*/*/
+!notebooks/*/*/*.png
+!notebooks/*.md/
 !results/
 !results/**/
 !results/**/**.pdf
