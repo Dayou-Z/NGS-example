@@ -21,6 +21,8 @@ library(gplots)
 library(ggpubr)
 library(patchwork)
 library(ggsci)
+library(clusterProfiler)
+library(tinyarray)
 ```
 ```{r}
 set.seed(1)
@@ -693,12 +695,68 @@ ggplot(bar_per_2, aes(x = Var2, y = percent)) +
   scale_fill_d3()
 ```
 
+Enrichment analysis:
+Example: MSLN Tumor cells DEG between control and 50um
 
+```{r}
+sce <- sce.all
+Idents(sce) <- sce$celltype
 
+markers <- FindMarkers(sce, group.by = "group",
+                       ident.1 = "Control",
+                       ident.2 = "ADU-S100 50µM",
+                       subset.ident = "MSLN Tumor")
 
+nrow(markers)
+```
 
+```{r}
+markers$change <- "stable"
+markers[markers$avg_log2FC >2,]$change = "up"
+markers[markers$avg_log2FC < -2,]$change = "down"
+table(markers$change)
+```
 
+```{r}
+s2e <- bitr(rownames(markers), fromType = "SYMBOL", toType = "ENTREZID",
+            OrgDb = "org.Hs.eg.db", drop = T)
 
+markers_new <- markers[rownames(markers) %in% s2e$SYMBOL,]
+p <- identical(rownames(markers), s2e$SYMBOL) ;p
+if(!p) s2e <- s2e[match(rownames(markers_new), s2e$SYMBOL),]
+markers_new$ENTREZID = s2e$ENTREZID
+gene_diff <- markers_new$ENTREZID[markers_new$change != "stable"]
+
+length(gene_diff)
+```
+
+```{r}
+library(org.Hs.eg.db)
+ekk <- enrichKEGG(gene = gene_diff,organism = 'hsa')
+ekk <- setReadable(ekk, OrgDb = org.Hs.eg.db, keyType = "ENTREZID")
+
+ego <- enrichGO(gene = gene_diff, OrgDb = org.Hs.eg.db,
+                ont = "ALL", readable = T)
+```
+
+```{r}
+p_go <- barplot(ego, split = "ONTOLOGY") + 
+  facet_grid(ONTOLOGY ~ ., space = "free_y",scales = "free_y") 
+
+p_kegg <- barplot(ekk)
+
+p_go
+p_kegg
+```
+
+```{r}
+dir.create("../results/5-enrichment")
+```
+
+```{r}
+ggsave("../results/5-enrichment/MSLN_go.pdf", plot = p_go)
+ggsave("../results/5-enrichment/MSLN_kegg.pdf", plot = p_kegg)
+```
 
 
 
